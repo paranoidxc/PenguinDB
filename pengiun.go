@@ -56,6 +56,7 @@ func Open(options Options) (*DB, error) {
 func (db *DB) Set(key []byte, value []byte) (interface{}, error) {
 	if len(key) == 0 {
 		return nil, ErrKeyIsEmpty
+	}
 
 	logEntry := &data.LogEntry{
 		Key:   key,
