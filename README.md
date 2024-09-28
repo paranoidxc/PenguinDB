@@ -10,14 +10,16 @@ As time passes, expired/deleted keys take up space which is not useful; Hence, a
 ## ToDo List
 
 - [ ] Base Idea
+- [ ] Data storage is not limited by RAM
 - [ ] Thread-Safe
 - [ ] Portable
 - [ ] Custom Expiry
 - [ ] Supports Merge
 - [ ] Single disk-seek write
 - [ ] Block cache for faster reads.
-- [ ] Compatible Redis
-- [ ] Http
+- [ ] Compatible Redis(Rich data structure: KV, List, Hash, ZSet, Set.)
+- [ ] HTTP API support, JSON output
+- [ ] Supports cluster, use RAFT
 
 ## Documentation
 
