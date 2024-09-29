@@ -20,12 +20,12 @@ const (
 
 type DataFile struct {
 	FileId    uint32
-	Offset    int64
-	IoManager storeer.IoStoreer
+	Offset  int64
+	IoStore storeer.IoStoreer
 }
 
 func (df *DataFile) Write(bytes []byte) error {
-	n, err := df.IoManager.Write(bytes)
+	n, err := df.IoStore.Write(bytes)
 	if err != nil {
 		return err
 	}
@@ -34,11 +34,11 @@ func (df *DataFile) Write(bytes []byte) error {
 }
 
 func (df *DataFile) Sync() error {
-	return df.IoManager.Sync()
+	return df.IoStore.Sync()
 }
 
 func (df *DataFile) Close() error {
-	return df.IoManager.Close()
+	return df.IoStore.Close()
 }
 
 func OpenDataFile(dirPath string, fileId uint32, ioType store.FileIOType) (*DataFile, error) {
@@ -56,14 +56,14 @@ func newDataFile(fileName string, fileId uint32, ioType store.FileIOType) (*Data
 		return nil, err
 	}
 	return &DataFile{
-		FileId:    fileId,
-		Offset:    0,
-		IoManager: ioManager,
+		FileId:  fileId,
+		Offset:  0,
+		IoStore: ioManager,
 	}, nil
 }
 
 func (df *DataFile) ReadLogEntry(offset int64) (*LogEntry, int64, error) {
-	fileSize, err := df.IoManager.Size()
+	fileSize, err := df.IoStore.Size()
 	if err != nil {
 		return nil, 0, err
 	}
@@ -120,6 +120,6 @@ func (df *DataFile) ReadLogEntry(offset int64) (*LogEntry, int64, error) {
 
 func (df *DataFile) readNBytes(n int64, offset int64) (b []byte, err error) {
 	b = make([]byte, n)
-	_, err = df.IoManager.Read(b, offset)
+	_, err = df.IoStore.Read(b, offset)
 	return
 }
