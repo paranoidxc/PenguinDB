@@ -3,8 +3,8 @@ package wal
 import (
 	"errors"
 	"fmt"
+	"github.com/paranoidxc/PenguinDB/face"
 	"github.com/paranoidxc/PenguinDB/impl/store"
-	"github.com/paranoidxc/PenguinDB/interface/face"
 	"hash/crc32"
 	"io"
 	"path/filepath"
@@ -62,7 +62,7 @@ func newDataFile(fileName string, fileId uint32, ioType store.FileIOType) (*Data
 	}, nil
 }
 
-func (df *DataFile) ReadLogEntry(offset int64) (*LogEntry, int64, error) {
+func (df *DataFile) ReadLogEntry(offset int64) (*face.LogEntry, int64, error) {
 	fileSize, err := df.IoStore.Size()
 	if err != nil {
 		return nil, 0, err
@@ -94,7 +94,7 @@ func (df *DataFile) ReadLogEntry(offset int64) (*LogEntry, int64, error) {
 	keySize, valueSize := int64(header.keySize), int64(header.valueSize)
 	var entrySize = headerSize + keySize + valueSize
 
-	logEnry := &LogEntry{
+	logEnry := &face.LogEntry{
 		Type: header.entryType,
 	}
 

@@ -1,9 +1,8 @@
 package index
 
 import (
+	"github.com/paranoidxc/PenguinDB/face"
 	"sync"
-
-	"github.com/paranoidxc/PenguinDB/wal"
 )
 
 type SyncDict struct {
@@ -14,31 +13,31 @@ func MakeSyncDict() *SyncDict {
 	return &SyncDict{}
 }
 
-func (dict *SyncDict) Set(key []byte, pos *wal.LogEntryPos) *wal.LogEntryPos {
+func (dict *SyncDict) Set(key []byte, pos *face.LogEntryPos) *face.LogEntryPos {
 	k := string(key)
 	old, existed := dict.m.Load(k)
-	item := wal.Item{Key: key, Pos: pos}
+	item := face.Item{Key: key, Pos: pos}
 	dict.m.Store(k, item)
 	if existed {
-		return old.(wal.Item).Pos
+		return old.(face.Item).Pos
 	}
 	return nil
 }
 
-func (dict *SyncDict) Get(key []byte) *wal.LogEntryPos {
+func (dict *SyncDict) Get(key []byte) *face.LogEntryPos {
 	val, ok := dict.m.Load(string(key))
 	if ok {
-		return val.(wal.Item).Pos
+		return val.(face.Item).Pos
 	}
 	return nil
 }
 
-func (dict *SyncDict) Delete(key []byte) (*wal.LogEntryPos, bool) {
+func (dict *SyncDict) Delete(key []byte) (*face.LogEntryPos, bool) {
 	k := string(key)
 	old, existed := dict.m.Load(k)
 	if existed {
 		dict.m.Delete(k)
-		return old.(wal.Item).Pos, true
+		return old.(face.Item).Pos, true
 	}
 	return nil, false
 }

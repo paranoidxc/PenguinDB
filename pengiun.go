@@ -1,9 +1,9 @@
 package penguinDB
 
 import (
+	"github.com/paranoidxc/PenguinDB/face"
 	"github.com/paranoidxc/PenguinDB/impl/index"
 	"github.com/paranoidxc/PenguinDB/impl/store"
-	"github.com/paranoidxc/PenguinDB/interface/indexer"
 	"github.com/paranoidxc/PenguinDB/wal"
 	"io"
 	"os"
@@ -16,7 +16,7 @@ import (
 type DB struct {
 	options     Options
 	mu          *sync.RWMutex
-	index       indexer.Indexer
+	index       face.Indexer
 	activeFile  *wal.DataFile
 	isInitial   bool
 	bytesWrite  uint
@@ -112,8 +112,8 @@ func (db *DB) loadDataFile() error {
 }
 
 func (db *DB) loadIndexFromDataFile() error {
-	updateIndex := func(key []byte, typ wal.LogEntryType, pos *wal.LogEntryPos) {
-		var oldPos *wal.LogEntryPos
+	updateIndex := func(key []byte, typ face.LogEntryType, pos *face.LogEntryPos) {
+		var oldPos *face.LogEntryPos
 		if typ == wal.LogEntryTypeDeleted {
 			oldPos, _ = db.index.Delete(key)
 			db.reclaimSize += int64(pos.Size)
@@ -140,7 +140,7 @@ func (db *DB) loadIndexFromDataFile() error {
 		}
 
 		// 构造内存索引并保存
-		logRecordPos := &wal.LogEntryPos{Fid: fileID, Offset: offset, Size: uint32(size)}
+		logRecordPos := &face.LogEntryPos{Fid: fileID, Offset: offset, Size: uint32(size)}
 
 		// 解析 Key，拿到事务序列号
 		realKey := logRecord.Key
@@ -182,7 +182,7 @@ func (db *DB) Set(key []byte, value []byte) (interface{}, error) {
 	}
 
 	// 构造 kv 结构体
-	logEntry := &wal.LogEntry{
+	logEntry := &face.LogEntry{
 		Key:   key,
 		Value: value,
 		Type:  wal.LogEntryTypeNormal,
@@ -229,7 +229,7 @@ func (db *DB) Delete(key []byte) error {
 	}
 
 	// 构造 logRecord 信息，标识其是被删除的
-	logEntry := &wal.LogEntry{
+	logEntry := &face.LogEntry{
 		Key:  key,
 		Type: wal.LogEntryTypeDeleted,
 	}
@@ -270,7 +270,7 @@ func (db *DB) Sync() error {
 	return db.activeFile.Sync()
 }
 
-func (db *DB) getValueByPosition(logEntryPos *wal.LogEntryPos) ([]byte, error) {
+func (db *DB) getValueByPosition(logEntryPos *face.LogEntryPos) ([]byte, error) {
 	var df *wal.DataFile
 	df = db.activeFile
 	if df == nil {
@@ -290,13 +290,13 @@ func (db *DB) getValueByPosition(logEntryPos *wal.LogEntryPos) ([]byte, error) {
 	return logEntry.Value, nil
 }
 
-func (db *DB) appendLogEntryWithLock(entry *wal.LogEntry) (*wal.LogEntryPos, error) {
+func (db *DB) appendLogEntryWithLock(entry *face.LogEntry) (*face.LogEntryPos, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	return db.appendLogEntry(entry)
 }
 
-func (db *DB) appendLogEntry(entry *wal.LogEntry) (*wal.LogEntryPos, error) {
+func (db *DB) appendLogEntry(entry *face.LogEntry) (*face.LogEntryPos, error) {
 	// 写入数据编码
 	encodeEntry, size := wal.EncodeLogEntry(entry)
 	offset := db.activeFile.Offset
@@ -306,7 +306,7 @@ func (db *DB) appendLogEntry(entry *wal.LogEntry) (*wal.LogEntryPos, error) {
 	}
 
 	// 内存索引信息
-	pos := &wal.LogEntryPos{
+	pos := &face.LogEntryPos{
 		Fid:    db.activeFile.FileId,
 		Offset: offset,
 		Size:   uint32(size),
