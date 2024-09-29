@@ -21,24 +21,24 @@ const (
 type DataFile struct {
 	FileId    uint32
 	Offset    int64
-	IoManager storeer.IOMgr
+	IoManager storeer.IoStoreer
 }
 
-func (fd *DataFile) Write(bytes []byte) error {
-	n, err := fd.IoManager.Write(bytes)
+func (df *DataFile) Write(bytes []byte) error {
+	n, err := df.IoManager.Write(bytes)
 	if err != nil {
 		return err
 	}
-	fd.Offset += int64(n)
+	df.Offset += int64(n)
 	return nil
 }
 
-func (fd *DataFile) Sync() error {
-	return fd.IoManager.Sync()
+func (df *DataFile) Sync() error {
+	return df.IoManager.Sync()
 }
 
-func (fd *DataFile) Close() error {
-	return fd.IoManager.Close()
+func (df *DataFile) Close() error {
+	return df.IoManager.Close()
 }
 
 func OpenDataFile(dirPath string, fileId uint32, ioType store.FileIOType) (*DataFile, error) {
@@ -51,7 +51,7 @@ func GetDataFileName(dirPath string, fileId uint32) string {
 }
 
 func newDataFile(fileName string, fileId uint32, ioType store.FileIOType) (*DataFile, error) {
-	ioManager, err := store.NewFileIOMgr(fileName)
+	ioManager, err := store.NewFileIoStore(fileName)
 	if err != nil {
 		return nil, err
 	}

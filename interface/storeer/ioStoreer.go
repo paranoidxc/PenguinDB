@@ -1,6 +1,6 @@
 package storeer
 
-type IOMgr interface {
+type IoStoreer interface {
 	Read([]byte, int64) (int, error)
 
 	Write([]byte) (int, error)

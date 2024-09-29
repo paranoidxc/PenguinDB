@@ -16,7 +16,7 @@ type FileIO struct {
 	fd *os.File
 }
 
-func NewFileIOMgr(fileName string) (*FileIO, error) {
+func NewFileIoStore(fileName string) (*FileIO, error) {
 	fd, err := os.OpenFile(
 		fileName,
 		os.O_CREATE|os.O_RDWR|os.O_APPEND,
