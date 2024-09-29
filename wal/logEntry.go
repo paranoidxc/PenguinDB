@@ -1,4 +1,4 @@
-package data
+package wal
 
 import (
 	"encoding/binary"
