@@ -1,4 +1,4 @@
-package storeer
+package face
 
 type IoStoreer interface {
 	Read([]byte, int64) (int, error)

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/paranoidxc/PenguinDB/impl/store"
-	"github.com/paranoidxc/PenguinDB/interface/storeer"
+	"github.com/paranoidxc/PenguinDB/interface/face"
 	"hash/crc32"
 	"io"
 	"path/filepath"
@@ -19,9 +19,9 @@ const (
 )
 
 type DataFile struct {
-	FileId    uint32
+	FileId  uint32
 	Offset  int64
-	IoStore storeer.IoStoreer
+	IoStore face.IoStoreer
 }
 
 func (df *DataFile) Write(bytes []byte) error {
