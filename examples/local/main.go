@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	penguinDB "github.com/paranoidxc/PenguinDB"
+	"github.com/paranoidxc/PenguinDB/lib/logger"
 	"os"
 	"strings"
 )
@@ -20,6 +21,15 @@ const (
 )
 
 func main() {
+	logger.Setup(&logger.Settings{
+		Path:           "logs",
+		Name:           "penguin",
+		Ext:            "log",
+		TimeFORMAT:     "2006-01-02",
+		OutputTerminal: true,
+	})
+	logger.SetDebugMode(true)
+
 	opt := penguinDB.Options{
 		PersistentDir: "PersistentData",
 	}
@@ -28,12 +38,15 @@ func main() {
 		panic(err)
 	}
 
+	logger.Info("penguinDB started")
+
 	for {
 		reader := bufio.NewReader(os.Stdin)
 		fmt.Printf("pengiunDB> ")
 
 		cmd, _ := reader.ReadString('\n')
 		cmd = strings.ToUpper(strings.TrimSpace(cmd))
+		logger.Info("cmd", cmd)
 		switch cmd {
 		case CMD_SET:
 			key, _ := reader.ReadString('\n')
