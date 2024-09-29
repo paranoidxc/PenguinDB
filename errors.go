@@ -13,4 +13,5 @@ var (
 	ErrDatabaseIsUsing        = errors.New("THE DATABASE DIRECTORY IS USED BY ANOTHER PROCESS")
 	ErrMergeRatioUnreached    = errors.New("THE MERGE RATIO DO NOT REACH THE OPTION")
 	ErrNoEnoughSpaceForMerge  = errors.New("NO ENOUGH DISK SPACE FOR MERGE")
+	ErrBackupDirIsEmpty       = errors.New("BACKUP DIRECTORY IS EMPTY")
 )

@@ -4,6 +4,7 @@ import (
 	"github.com/paranoidxc/PenguinDB/face"
 	"github.com/paranoidxc/PenguinDB/impl/index"
 	"github.com/paranoidxc/PenguinDB/impl/store"
+	"github.com/paranoidxc/PenguinDB/lib/utils"
 	"github.com/paranoidxc/PenguinDB/wal"
 	"io"
 	"os"
@@ -13,11 +14,17 @@ import (
 	"sync"
 )
 
+const (
+	fileLockName = "flock"
+)
+
 type DB struct {
 	options     Options
 	mu          *sync.RWMutex
 	index       face.Indexer
 	activeFile  *wal.DataFile
+	fileIds     []int
+	olderFiles  map[uint32]*wal.DataFile
 	isInitial   bool
 	bytesWrite  uint
 	reclaimSize int64
@@ -42,10 +49,11 @@ func Open(options Options) (*DB, error) {
 	}
 
 	db := &DB{
-		options:   options,
-		mu:        new(sync.RWMutex),
-		index:     index.MakeSyncDict(),
-		isInitial: isInitial,
+		options:    options,
+		mu:         new(sync.RWMutex),
+		index:      index.MakeSyncDict(),
+		olderFiles: make(map[uint32]*wal.DataFile),
+		isInitial:  isInitial,
 	}
 
 	if db.activeFile == nil {
@@ -91,7 +99,7 @@ func (db *DB) loadDataFile() error {
 
 	// 对文件 id 进行排序，从小大大依次加载
 	sort.Ints(fileIds)
-	//db.fileIds = fileIds
+	db.fileIds = fileIds
 
 	// 遍历每个文件的id，打开对应的数据文件
 
@@ -104,7 +112,7 @@ func (db *DB) loadDataFile() error {
 		if i == len(fileIds)-1 { // 最后一个，id是最大的，说明是当前活跃文件
 			db.activeFile = dataFile
 		} else { // 说明是旧的数据文件
-			//db.olderFiles[uint32(fid)] = dataFile
+			db.olderFiles[uint32(fid)] = dataFile
 		}
 	}
 
@@ -112,6 +120,10 @@ func (db *DB) loadDataFile() error {
 }
 
 func (db *DB) loadIndexFromDataFile() error {
+	if len(db.fileIds) == 0 {
+		return nil
+	}
+
 	updateIndex := func(key []byte, typ face.LogEntryType, pos *face.LogEntryPos) {
 		var oldPos *face.LogEntryPos
 		if typ == wal.LogEntryTypeDeleted {
@@ -125,32 +137,42 @@ func (db *DB) loadIndexFromDataFile() error {
 		}
 	}
 
-	var dataFile *wal.DataFile
-	dataFile = db.activeFile
-	fileID := db.activeFile.FileId
+	// 遍历文件 加载索引
+	for i, fid := range db.fileIds {
+		var fileID = uint32(fid)
+		var dataFile *wal.DataFile
 
-	var offset int64 = 0
-	for {
-		logRecord, size, err := dataFile.ReadLogEntry(offset)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return err
+		if fileID == db.activeFile.FileId {
+			dataFile = db.activeFile
+		} else {
+			dataFile = db.olderFiles[fileID]
 		}
 
-		// 构造内存索引并保存
-		logRecordPos := &face.LogEntryPos{Fid: fileID, Offset: offset, Size: uint32(size)}
+		var offset int64 = 0
+		for {
+			logEntry, size, err := dataFile.ReadLogEntry(offset)
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				return err
+			}
 
-		// 解析 Key，拿到事务序列号
-		realKey := logRecord.Key
-		updateIndex(realKey, logRecord.Type, logRecordPos)
+			// 构造内存索引并保存
+			logEntryPos := &face.LogEntryPos{Fid: fileID, Offset: offset, Size: uint32(size)}
 
-		// 递增 offset， 下一次直接从新的位置读取
-		offset += size
+			// 解析 Key，拿到事务序列号
+			realKey := logEntry.Key
+			updateIndex(realKey, logEntry.Type, logEntryPos)
+
+			// 递增 offset， 下一次直接从新的位置读取
+			offset += size
+		}
+
+		if i == len(db.fileIds)-1 {
+			db.activeFile.Offset = offset
+		}
 	}
-
-	db.activeFile.Offset = offset
 
 	return nil
 }
@@ -252,8 +274,21 @@ func (db *DB) Delete(key []byte) error {
 	return nil
 }
 
-func (db *DB) All() (interface{}, error) {
-	return nil, nil
+func (db *DB) Keys() [][]byte {
+	keys := make([][]byte, db.index.Size())
+	_, ok := db.index.(*index.SyncDict)
+	if ok {
+		keys = db.index.Keys()
+	} else {
+		iterator := db.index.Iterator(false)
+		defer iterator.Close()
+		var idx int
+		for iterator.Rewind(); iterator.Valid(); iterator.Next() {
+			keys[idx] = iterator.Key()
+			idx += 1
+		}
+	}
+	return keys
 }
 
 func (db *DB) Merge() (interface{}, error) {
@@ -270,9 +305,24 @@ func (db *DB) Sync() error {
 	return db.activeFile.Sync()
 }
 
+func (db *DB) Backup(dir string) error {
+	if len(dir) == 0 {
+		return ErrBackupDirIsEmpty
+	}
+
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	return utils.CopyDir(db.options.PersistentDir, dir, []string{fileLockName})
+}
+
 func (db *DB) getValueByPosition(logEntryPos *face.LogEntryPos) ([]byte, error) {
 	var df *wal.DataFile
-	df = db.activeFile
+	if db.activeFile.FileId == logEntryPos.Fid {
+		df = db.activeFile
+	} else {
+		df = db.olderFiles[logEntryPos.Fid]
+	}
 	if df == nil {
 		return nil, ErrDataFileNotFound
 	}
@@ -299,8 +349,24 @@ func (db *DB) appendLogEntryWithLock(entry *face.LogEntry) (*face.LogEntryPos, e
 func (db *DB) appendLogEntry(entry *face.LogEntry) (*face.LogEntryPos, error) {
 	// 写入数据编码
 	encodeEntry, size := wal.EncodeLogEntry(entry)
-	offset := db.activeFile.Offset
 
+	// 判断是否要开启新的文件
+	if db.activeFile.Offset+size > db.options.PersistentDataFileSizeMax {
+		// 先将当前活跃文件进行持久化，保证已有的数据持久到磁盘当中
+		if err := db.activeFile.Sync(); err != nil {
+			return nil, err
+		}
+
+		// 将当前活跃文件转换为旧的数据文件
+		db.olderFiles[db.activeFile.FileId] = db.activeFile
+
+		// 打开新的数据文件
+		if err := db.setActiveDataFile(); err != nil {
+			return nil, err
+		}
+	}
+
+	offset := db.activeFile.Offset
 	if err := db.activeFile.Write(encodeEntry); err != nil {
 		return nil, err
 	}

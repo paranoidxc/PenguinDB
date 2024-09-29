@@ -32,5 +32,33 @@ type Indexer interface {
 	// Size 返回索引中存在了多少条数据
 	Size() int
 
+	// Iterator 索引迭代器
+	Iterator(reverse bool) Iterator
+	Keys() [][]byte
+
 	Close() error
+}
+
+// Iterator 通用的索引迭代器接口
+type Iterator interface {
+	// Rewind 重新回到迭代器的起点，即第一个数据
+	Rewind()
+
+	// Seek 根据传入的 key 查找第一个大于(或小于)等于的目标key，从这个key开始遍历
+	Seek(key []byte)
+
+	// Next 跳转到下一个key
+	Next()
+
+	// Valid 当前遍历的位置的
+	Valid() bool
+
+	// Key 当前遍历位置的 Key 数据
+	Key() []byte
+
+	// Value 当前遍历位置的 Value 数据
+	Value() *LogEntryPos
+
+	// Close 关闭迭代器，释放相应资源
+	Close()
 }
