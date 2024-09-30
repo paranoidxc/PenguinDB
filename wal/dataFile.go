@@ -15,7 +15,8 @@ var (
 )
 
 const (
-	StoreFileNameSuffix = ".data"
+	StoreFileNameSuffix   = ".data"
+	MergeFinishedFileName = "merge-finished"
 )
 
 type DataFile struct {
@@ -44,6 +45,11 @@ func (df *DataFile) Close() error {
 func OpenDataFile(dirPath string, fileId uint32, ioType store.FileIOType) (*DataFile, error) {
 	fileName := GetDataFileName(dirPath, fileId)
 	return newDataFile(fileName, fileId, ioType)
+}
+
+func OpenMergeFinishedFile(dirPath string) (*DataFile, error) {
+	fileName := filepath.Join(dirPath, MergeFinishedFileName)
+	return newDataFile(fileName, 0, store.StandardFIO)
 }
 
 func GetDataFileName(dirPath string, fileId uint32) string {

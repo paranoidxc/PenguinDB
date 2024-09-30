@@ -4,10 +4,12 @@ import (
 	"github.com/paranoidxc/PenguinDB/face"
 	"github.com/paranoidxc/PenguinDB/impl/index"
 	"github.com/paranoidxc/PenguinDB/impl/store"
+	"github.com/paranoidxc/PenguinDB/lib/logger"
 	"github.com/paranoidxc/PenguinDB/lib/utils"
 	"github.com/paranoidxc/PenguinDB/wal"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,12 +17,15 @@ import (
 )
 
 const (
-	fileLockName = "flock"
+	fileLockName     = "flock"
+	mergeDirName     = "-merge"
+	mergeFinishedKye = "merge.finished"
 )
 
 type DB struct {
 	options     Options
 	closed      bool
+	isMerging   bool
 	mu          *sync.RWMutex
 	index       face.Indexer
 	activeFile  *wal.DataFile
@@ -63,6 +68,11 @@ func Open(options Options) (*DB, error) {
 		}
 	}
 
+	// 加载 merge 数据目录
+	if err := db.loadMergeFiles(); err != nil {
+		return nil, err
+	}
+
 	// 读取数据文件
 	if err := db.loadDataFile(); err != nil {
 		return nil, err
@@ -74,6 +84,80 @@ func Open(options Options) (*DB, error) {
 	}
 
 	return db, nil
+}
+
+func (db *DB) loadMergeFiles() error {
+	mergePath := db.getMergePath()
+	if _, err := os.Stat(mergePath); os.IsNotExist(err) {
+		return nil
+	}
+	defer func() {
+		_ = os.RemoveAll(mergePath)
+	}()
+
+	dirEntries, err := os.ReadDir(mergePath)
+	if err != nil {
+		return err
+	}
+
+	// 查找标识 merge 完成文件 判断 merge 是否处理完毕
+	var mergeFinished bool
+	var mergeFileNames []string
+	for _, entry := range dirEntries {
+		if entry.Name() == wal.MergeFinishedFileName {
+			mergeFinished = true
+		}
+		if entry.Name() == fileLockName {
+			continue
+		}
+		mergeFileNames = append(mergeFileNames, entry.Name())
+	}
+
+	// 没有 merge 完成则直接返回
+	if !mergeFinished {
+		return nil
+	}
+
+	nonMergeFileId, err := db.getNonMergeFileId(mergePath)
+	if err != nil {
+		return err
+	}
+
+	// 删除对应的数据文件
+	var fileId uint32 = 0
+	for ; fileId < nonMergeFileId; fileId++ {
+		fileName := wal.GetDataFileName(db.options.PersistentDir, fileId)
+		if _, err := os.Stat(fileName); err == nil {
+			if err := os.Remove(fileName); err != nil {
+				return err
+			}
+		}
+	}
+	// 将新的数据文件移动到数据目录中
+	for _, fileName := range mergeFileNames {
+		srcPath := filepath.Join(mergePath, fileName)
+		destPath := filepath.Join(db.options.PersistentDir, fileName)
+		if err := os.Rename(srcPath, destPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (db *DB) getNonMergeFileId(dirPath string) (uint32, error) {
+	mergeFinishedFile, err := wal.OpenMergeFinishedFile(dirPath)
+	if err != nil {
+		return 0, err
+	}
+	logEntry, _, err := mergeFinishedFile.ReadLogEntry(0)
+	if err != nil {
+		return 0, err
+	}
+	nonMergeFileId, err := strconv.Atoi(string(logEntry.Value))
+	if err != nil {
+		return 0, err
+	}
+	return uint32(nonMergeFileId), nil
 }
 
 // 从磁盘加载数据文件
@@ -92,6 +176,7 @@ func (db *DB) loadDataFile() error {
 			fileId, err := strconv.Atoi(splitNames[0])
 			// 数据目录肯被损坏了
 			if err != nil {
+				logger.Error("load data file error: ", err)
 				return ErrDataDirectoryCorrupted
 			}
 			fileIds = append(fileIds, fileId)
@@ -301,8 +386,152 @@ func (db *DB) Keys() [][]byte {
 	return keys
 }
 
-func (db *DB) Merge() (interface{}, error) {
-	return nil, nil
+func (db *DB) getMergePath() string {
+	dir := filepath.Dir(filepath.Clean(db.options.PersistentDir))
+	base := filepath.Base(db.options.PersistentDir)
+
+	return filepath.Join(dir, base+mergeDirName)
+}
+
+func (db *DB) Merge() error {
+	if db.activeFile == nil {
+		return nil
+	}
+
+	db.mu.Lock()
+
+	if db.closed {
+		db.mu.Unlock()
+		return ErrDbClosed
+	}
+
+	if db.isMerging {
+		db.mu.Unlock()
+		return ErrMergeIsProgress
+	}
+	db.isMerging = true
+	defer func() {
+		db.isMerging = false
+	}()
+
+	totalSize, err := utils.DirSize(db.options.PersistentDir)
+	if err != nil {
+		db.mu.Unlock()
+		return err
+	}
+
+	if float32(db.reclaimSize)/float32(totalSize) < db.options.PersistentDataFileMergeRatio {
+		//db.mu.Unlock()
+		//return ErrMergeRatioUnreached
+	}
+
+	availableDiskSize, err := utils.AvailableDiskSize()
+	if err != nil {
+		db.mu.Unlock()
+		return err
+	}
+
+	if uint64(totalSize-db.reclaimSize) >= availableDiskSize {
+		db.mu.Unlock()
+		return ErrNoEnoughSpaceForMerge
+	}
+
+	if err := db.activeFile.Sync(); err != nil {
+		db.mu.Unlock()
+		return err
+	}
+
+	db.olderFiles[db.activeFile.FileId] = db.activeFile
+	if err := db.setActiveDataFile(); err != nil {
+		db.mu.Unlock()
+		return nil
+	}
+
+	nonMergeFileId := db.activeFile.FileId
+	var mergeFilesPoint []*wal.DataFile
+	for _, file := range db.olderFiles {
+		mergeFilesPoint = append(mergeFilesPoint, file)
+	}
+	db.mu.Unlock()
+
+	// 按文件号从小大大排序
+	sort.Slice(mergeFilesPoint, func(i, j int) bool {
+		return mergeFilesPoint[i].FileId < mergeFilesPoint[j].FileId
+	})
+
+	mergePath := db.getMergePath()
+	// 如果目录存在，说明发生过 merge 将其删除掉
+	if _, err := os.Stat(mergePath); err == nil {
+		if err := os.RemoveAll(mergePath); err != nil {
+			return err
+		}
+	}
+
+	// 新建一个 merge path 的目录
+	if err := os.MkdirAll(mergePath, os.ModePerm); err != nil {
+		return err
+	}
+
+	// 打开一个新的临时 db 实例
+	mergeOptions := db.options
+	mergeOptions.PersistentDir = mergePath
+	mergeDB, err := Open(mergeOptions)
+	if err != nil {
+		return err
+	}
+	// 遍历处理每个数据文件
+	for _, dataFile := range mergeFilesPoint {
+		var offset int64 = 0
+		for {
+			logEntry, size, err := dataFile.ReadLogEntry(offset)
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				return err
+			}
+			// 解析拿到实际的 key
+			realKey := logEntry.Key
+			logEntryPos := db.index.Get(realKey)
+			// 和内存中的索引位置进行比较。如果有效则重写
+			if logEntryPos != nil &&
+				logEntryPos.Fid == dataFile.FileId &&
+				logEntryPos.Offset == offset {
+				// 不需要使用事务序列号 清除事务标记
+				logEntry.Key = realKey
+				_, err := mergeDB.appendLogEntry(logEntry)
+				if err != nil {
+					return err
+				}
+			}
+			// 增加 offset
+			offset += size
+		}
+	}
+
+	//  保证持久化
+	if err := mergeDB.Sync(); err != nil {
+		return err
+	}
+	// 写标识 merge 完成的文件
+	mergeFinishedFile, err := wal.OpenMergeFinishedFile(mergePath)
+	if err != nil {
+		return err
+	}
+	mergeFinRecord := &face.LogEntry{
+		Key:   []byte(mergeFinishedKye),
+		Value: []byte(strconv.Itoa(int(nonMergeFileId))),
+	}
+
+	encRecord, _ := wal.EncodeLogEntry(mergeFinRecord)
+	if err := mergeFinishedFile.Write(encRecord); err != nil {
+		return err
+	}
+
+	if err := mergeFinishedFile.Sync(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (db *DB) Sync() error {

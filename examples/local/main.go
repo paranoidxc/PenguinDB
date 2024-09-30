@@ -89,7 +89,12 @@ func main() {
 				fmt.Printf("key=%s \n", string(key))
 			}
 		case CMD_MERGE:
-			fmt.Println(CMD_MERGE)
+			err := db.Merge()
+			if err != nil {
+				fmt.Printf("%s  err:%s\n", CMD_MERGE, err)
+				break
+			}
+			fmt.Printf("%s okay\n", CMD_MERGE)
 		case CMD_SYNC:
 			err := db.Sync()
 			if err != nil {
