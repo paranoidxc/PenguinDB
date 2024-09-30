@@ -5,6 +5,7 @@ import (
 	"github.com/paranoidxc/PenguinDB/face"
 	"github.com/paranoidxc/PenguinDB/impl/index"
 	"github.com/paranoidxc/PenguinDB/impl/store"
+	"github.com/paranoidxc/PenguinDB/inter/watch"
 	"github.com/paranoidxc/PenguinDB/lib/flock"
 	"github.com/paranoidxc/PenguinDB/lib/logger"
 	"github.com/paranoidxc/PenguinDB/lib/utils"
@@ -37,6 +38,7 @@ type DB struct {
 	isInitial   bool
 	bytesWrite  uint
 	reclaimSize int64
+	watcher     chan watch.WatcherEvent
 }
 
 func Open(options Options) (*DB, error) {
@@ -96,6 +98,8 @@ func Open(options Options) (*DB, error) {
 	if err := db.loadIndexFromDataFile(); err != nil {
 		return nil, err
 	}
+
+	db.watcher = make(chan watch.WatcherEvent, 0)
 
 	return db, nil
 }
@@ -307,6 +311,7 @@ func (db *DB) Close() error {
 		return err
 	}
 
+	close(db.watcher)
 	return nil
 }
 
@@ -331,6 +336,9 @@ func (db *DB) Set(key []byte, value []byte) (interface{}, error) {
 	// 写入内存索引
 	if oldEntryPos := db.index.Set(key, entryPos); oldEntryPos != nil {
 		db.reclaimSize += int64(oldEntryPos.Size)
+		_ = db.sendWatcherEvent(watch.NewUpdateWatcherEvent(key, nil, nil))
+	} else {
+		_ = db.sendWatcherEvent(watch.NewCreateWatcherEvent(key, nil, nil))
 	}
 
 	return nil, nil
@@ -387,6 +395,8 @@ func (db *DB) Delete(key []byte) error {
 	if oldEntryPos != nil {
 		db.reclaimSize += int64(oldEntryPos.Size)
 	}
+
+	_ = db.sendWatcherEvent(watch.NewDeleteWatcherEvent(key, nil, nil))
 	return nil
 }
 
@@ -662,5 +672,23 @@ func (db *DB) setActiveDataFile() error {
 	}
 	db.activeFile = dataFile
 
+	return nil
+}
+
+func (db *DB) NewWatch() (chan watch.WatcherEvent, error) {
+	if db.closed {
+		return nil, ERR_DB_CLOSED
+	}
+
+	return db.watcher, nil
+}
+
+func (db *DB) sendWatcherEvent(event watch.WatcherEvent) error {
+	if db.closed {
+		return ERR_DB_CLOSED
+	}
+	go func() {
+		db.watcher <- event
+	}()
 	return nil
 }
