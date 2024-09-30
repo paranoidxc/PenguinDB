@@ -27,7 +27,7 @@ func main() {
 		Name:           "penguin",
 		Ext:            "log",
 		TimeFORMAT:     "2006-01-02",
-		OutputTerminal: true,
+		OutputTerminal: false,
 	})
 	logger.SetDebugMode(true)
 

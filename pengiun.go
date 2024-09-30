@@ -4,6 +4,7 @@ import (
 	"github.com/paranoidxc/PenguinDB/face"
 	"github.com/paranoidxc/PenguinDB/impl/index"
 	"github.com/paranoidxc/PenguinDB/impl/store"
+	"github.com/paranoidxc/PenguinDB/lib/flock"
 	"github.com/paranoidxc/PenguinDB/lib/logger"
 	"github.com/paranoidxc/PenguinDB/lib/utils"
 	"github.com/paranoidxc/PenguinDB/wal"
@@ -43,6 +44,16 @@ func Open(options Options) (*DB, error) {
 		if err = os.MkdirAll(options.PersistentDir, os.ModePerm); err != nil {
 			return nil, err
 		}
+	}
+
+	fileLock := flock.New(filepath.Join(options.PersistentDir, fileLockName))
+	hold, err := fileLock.TryLock()
+	if err != nil {
+		return nil, err
+	}
+
+	if !hold {
+		return nil, ERR_DATABASE_IS_USING
 	}
 
 	files, err := os.ReadDir(options.PersistentDir)
@@ -177,7 +188,7 @@ func (db *DB) loadDataFile() error {
 			// 数据目录肯被损坏了
 			if err != nil {
 				logger.Error("load data file error: ", err)
-				return ErrDataDirectoryCorrupted
+				return ERR_DATA_DIRECTORY_CORRUPTED
 			}
 			fileIds = append(fileIds, fileId)
 		}
@@ -272,7 +283,7 @@ func (db *DB) Close() error {
 	defer db.mu.Unlock()
 
 	if db.closed {
-		return ErrDbClosed
+		return ERR_DB_CLOSED
 	}
 	db.closed = true
 
@@ -291,7 +302,7 @@ func (db *DB) Close() error {
 
 func (db *DB) Set(key []byte, value []byte) (interface{}, error) {
 	if len(key) == 0 {
-		return nil, ErrKeyIsEmpty
+		return nil, ERR_KEY_IS_EMPTY
 	}
 
 	// 构造 kv 结构体
@@ -317,19 +328,19 @@ func (db *DB) Set(key []byte, value []byte) (interface{}, error) {
 
 func (db *DB) Get(key []byte) ([]byte, error) {
 	if len(key) == 0 {
-		return nil, ErrKeyIsEmpty
+		return nil, ERR_KEY_IS_EMPTY
 	}
 
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
 	if db.closed {
-		return nil, ErrDbClosed
+		return nil, ERR_DB_CLOSED
 	}
 
 	logEntryPos := db.index.Get(key)
 	if logEntryPos == nil {
-		return nil, ErrKeyNotFound
+		return nil, ERR_KEY_NOT_FOUND
 	}
 
 	// 从数据文件中获取value
@@ -338,7 +349,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 
 func (db *DB) Delete(key []byte) error {
 	if len(key) == 0 {
-		return ErrKeyIsEmpty
+		return ERR_KEY_IS_EMPTY
 	}
 
 	if entryPos := db.index.Get(key); entryPos == nil {
@@ -360,7 +371,7 @@ func (db *DB) Delete(key []byte) error {
 	// 从内存索引中删除
 	oldEntryPos, ok := db.index.Delete(key)
 	if !ok {
-		return ErrIndexUpdateFailed
+		return ERR_INDEX_UPDATE_FAILED
 	}
 
 	if oldEntryPos != nil {
@@ -402,12 +413,12 @@ func (db *DB) Merge() error {
 
 	if db.closed {
 		db.mu.Unlock()
-		return ErrDbClosed
+		return ERR_DB_CLOSED
 	}
 
 	if db.isMerging {
 		db.mu.Unlock()
-		return ErrMergeIsProgress
+		return ERR_MERGE_IS_PROGRESS
 	}
 	db.isMerging = true
 	defer func() {
@@ -421,8 +432,8 @@ func (db *DB) Merge() error {
 	}
 
 	if float32(db.reclaimSize)/float32(totalSize) < db.options.PersistentDataFileMergeRatio {
-		//db.mu.Unlock()
-		//return ErrMergeRatioUnreached
+		db.mu.Unlock()
+		return ERR_MERGE_RATIO_UNREACHED
 	}
 
 	availableDiskSize, err := utils.AvailableDiskSize()
@@ -433,7 +444,7 @@ func (db *DB) Merge() error {
 
 	if uint64(totalSize-db.reclaimSize) >= availableDiskSize {
 		db.mu.Unlock()
-		return ErrNoEnoughSpaceForMerge
+		return ERR_NO_ENOUGH_SPACE_FOR_MERGE
 	}
 
 	if err := db.activeFile.Sync(); err != nil {
@@ -542,7 +553,7 @@ func (db *DB) Sync() error {
 	defer db.mu.Unlock()
 
 	if db.closed {
-		return ErrDbClosed
+		return ERR_DB_CLOSED
 	}
 
 	return db.activeFile.Sync()
@@ -550,13 +561,13 @@ func (db *DB) Sync() error {
 
 func (db *DB) Backup(dir string) error {
 	if len(dir) == 0 {
-		return ErrBackupDirIsEmpty
+		return ERR_BACKUP_DIR_IS_EMPTY
 	}
 
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 	if db.closed {
-		return ErrDbClosed
+		return ERR_DB_CLOSED
 	}
 
 	return utils.CopyDir(db.options.PersistentDir, dir, []string{fileLockName})
@@ -570,7 +581,7 @@ func (db *DB) getValueByPosition(logEntryPos *face.LogEntryPos) ([]byte, error) 
 		df = db.olderFiles[logEntryPos.Fid]
 	}
 	if df == nil {
-		return nil, ErrDataFileNotFound
+		return nil, ERR_DATA_FILE_NOT_FOUND
 	}
 
 	// 根据偏移量读取对应的数
@@ -580,7 +591,7 @@ func (db *DB) getValueByPosition(logEntryPos *face.LogEntryPos) ([]byte, error) 
 	}
 
 	if logEntry.Type == wal.LogEntryTypeDeleted {
-		return nil, ErrKeyNotFound
+		return nil, ERR_KEY_NOT_FOUND
 	}
 
 	return logEntry.Value, nil
@@ -590,7 +601,7 @@ func (db *DB) appendLogEntryWithLock(entry *face.LogEntry) (*face.LogEntryPos, e
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if db.closed {
-		return nil, ErrDbClosed
+		return nil, ERR_DB_CLOSED
 	}
 	return db.appendLogEntry(entry)
 }
