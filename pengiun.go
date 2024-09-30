@@ -20,6 +20,7 @@ const (
 
 type DB struct {
 	options     Options
+	closed      bool
 	mu          *sync.RWMutex
 	index       face.Indexer
 	activeFile  *wal.DataFile
@@ -185,6 +186,11 @@ func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	if db.closed {
+		return ErrDbClosed
+	}
+	db.closed = true
+
 	// 关闭内存索引
 	if err := db.index.Close(); err != nil {
 		return err
@@ -231,6 +237,10 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 
 	db.mu.RLock()
 	defer db.mu.RUnlock()
+
+	if db.closed {
+		return nil, ErrDbClosed
+	}
 
 	logEntryPos := db.index.Get(key)
 	if logEntryPos == nil {
@@ -302,6 +312,10 @@ func (db *DB) Sync() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	if db.closed {
+		return ErrDbClosed
+	}
+
 	return db.activeFile.Sync()
 }
 
@@ -312,6 +326,9 @@ func (db *DB) Backup(dir string) error {
 
 	db.mu.RLock()
 	defer db.mu.RUnlock()
+	if db.closed {
+		return ErrDbClosed
+	}
 
 	return utils.CopyDir(db.options.PersistentDir, dir, []string{fileLockName})
 }
@@ -343,6 +360,9 @@ func (db *DB) getValueByPosition(logEntryPos *face.LogEntryPos) ([]byte, error) 
 func (db *DB) appendLogEntryWithLock(entry *face.LogEntry) (*face.LogEntryPos, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	if db.closed {
+		return nil, ErrDbClosed
+	}
 	return db.appendLogEntry(entry)
 }
 
