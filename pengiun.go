@@ -1,6 +1,7 @@
 package penguinDB
 
 import (
+	"fmt"
 	"github.com/paranoidxc/PenguinDB/face"
 	"github.com/paranoidxc/PenguinDB/impl/index"
 	"github.com/paranoidxc/PenguinDB/impl/store"
@@ -32,6 +33,7 @@ type DB struct {
 	activeFile  *wal.DataFile
 	fileIds     []int
 	olderFiles  map[uint32]*wal.DataFile
+	fileLock    *flock.Flock
 	isInitial   bool
 	bytesWrite  uint
 	reclaimSize int64
@@ -71,6 +73,7 @@ func Open(options Options) (*DB, error) {
 		index:      index.MakeSyncDict(),
 		olderFiles: make(map[uint32]*wal.DataFile),
 		isInitial:  isInitial,
+		fileLock:   fileLock,
 	}
 
 	if db.activeFile == nil {
@@ -275,6 +278,13 @@ func (db *DB) loadIndexFromDataFile() error {
 }
 
 func (db *DB) Close() error {
+	defer func() {
+		if err := db.fileLock.Unlock(); err != nil {
+			logger.Error("FAILED TO UNLOCK THE DIRECTORY", err)
+			panic(fmt.Sprintf("FAILED TO UNLOCK THE DIRECTORY, %v", err))
+		}
+	}()
+
 	if db.activeFile == nil {
 		return nil
 	}
