@@ -157,7 +157,7 @@ func logRecordKeyWithSeq(key []byte, seqNo uint64) []byte {
 }
 
 // 解析 LogRecord 的 Key，获取实际的 key 和事务序列号
-func parseLogRecordKey(key []byte) ([]byte, uint64) {
+func parseLogEntryKey(key []byte) ([]byte, uint64) {
 	seqNo, n := binary.Uvarint(key)
 	realKey := key[n:]
 	return realKey, seqNo

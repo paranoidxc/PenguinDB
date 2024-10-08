@@ -230,6 +230,16 @@ func (db *DB) loadIndexFromDataFile() error {
 	if len(db.fileIds) == 0 {
 		return nil
 	}
+	hasMerge, nonMergeFileId := false, uint32(0)
+	mergeFinFileName := filepath.Join(db.options.PersistentDir, wal.MergeFinishedFileName)
+	if _, err := os.Stat(mergeFinFileName); err == nil {
+		fid, err := db.getNonMergeFileId(db.options.PersistentDir)
+		if err != nil {
+			return err
+		}
+		hasMerge = true
+		nonMergeFileId = fid
+	}
 
 	updateIndex := func(key []byte, typ face.LogEntryType, pos *face.LogEntryPos) {
 		var oldPos *face.LogEntryPos
@@ -244,11 +254,20 @@ func (db *DB) loadIndexFromDataFile() error {
 		}
 	}
 
+	// 暂存事务数据
+	transactionsRecords := make(map[uint64][]*face.TransactionRecord)
+	var currentSeqNo uint64 = nonTransactionSeqNo
+
 	// 遍历文件 加载索引
 	for i, fid := range db.fileIds {
 		var fileID = uint32(fid)
-		var dataFile *wal.DataFile
 
+		// 如果比最近未参与 merge 的文件 id 更小，说明已经从 hint 文件中加载索引了
+		if hasMerge && fileID < nonMergeFileId {
+			continue
+		}
+
+		var dataFile *wal.DataFile
 		if fileID == db.activeFile.FileId {
 			dataFile = db.activeFile
 		} else {
@@ -269,8 +288,29 @@ func (db *DB) loadIndexFromDataFile() error {
 			logEntryPos := &face.LogEntryPos{Fid: fileID, Offset: offset, Size: uint32(size)}
 
 			// 解析 Key，拿到事务序列号
-			realKey := logEntry.Key
-			updateIndex(realKey, logEntry.Type, logEntryPos)
+			realKey, seqNo := parseLogEntryKey(logEntry.Key)
+			if seqNo == nonTransactionSeqNo {
+				updateIndex(realKey, logEntry.Type, logEntryPos)
+			} else {
+				// 事务完成，对应的 seq no 的数据可以更新到内存索引中
+				if logEntry.Type == wal.LogEntryTypeTxnFinished {
+					for _, txnRecord := range transactionsRecords[seqNo] {
+						updateIndex(txnRecord.Record.Key, txnRecord.Record.Type, txnRecord.Pos)
+					}
+					delete(transactionsRecords, seqNo)
+				} else {
+					logEntry.Key = realKey
+					transactionsRecords[seqNo] = append(transactionsRecords[seqNo], &face.TransactionRecord{
+						Record: logEntry,
+						Pos:    logEntryPos,
+					})
+				}
+			}
+
+			// 更新事务序列号
+			if seqNo > currentSeqNo {
+				currentSeqNo = seqNo
+			}
 
 			// 递增 offset， 下一次直接从新的位置读取
 			offset += size
@@ -281,6 +321,7 @@ func (db *DB) loadIndexFromDataFile() error {
 		}
 	}
 
+	db.seqNo = currentSeqNo
 	return nil
 }
 
@@ -309,6 +350,23 @@ func (db *DB) Close() error {
 		return err
 	}
 
+	// 保存当前事务序列号4w
+	seqNoFile, err := wal.OpenSeqNoFIle(db.options.PersistentDir)
+	if err != nil {
+		return err
+	}
+	record := &face.LogEntry{
+		Key:   []byte(seqNoKey),
+		Value: []byte(strconv.FormatUint(db.seqNo, 10)),
+	}
+	encRecord, _ := wal.EncodeLogEntry(record)
+	if err := seqNoFile.Write(encRecord); err != nil {
+		return err
+	}
+	if err := seqNoFile.Sync(); err != nil {
+		return err
+	}
+
 	// 关闭活跃文件
 	if err := db.activeFile.Close(); err != nil {
 		return err
@@ -325,7 +383,7 @@ func (db *DB) Set(key []byte, value []byte) (interface{}, error) {
 
 	// 构造 kv 结构体
 	logEntry := &face.LogEntry{
-		Key:   key,
+		Key:   logRecordKeyWithSeq(key, nonTransactionSeqNo),
 		Value: value,
 		Type:  wal.LogEntryTypeNormal,
 	}
@@ -379,7 +437,7 @@ func (db *DB) Delete(key []byte) error {
 
 	// 构造 logRecord 信息，标识其是被删除的
 	logEntry := &face.LogEntry{
-		Key:  key,
+		Key:  logRecordKeyWithSeq(key, nonTransactionSeqNo),
 		Type: wal.LogEntryTypeDeleted,
 	}
 	// 写入到数据文件中
@@ -525,7 +583,7 @@ func (db *DB) Merge() error {
 				return err
 			}
 			// 解析拿到实际的 key
-			realKey := logEntry.Key
+			realKey, _ := parseLogEntryKey(logEntry.Key)
 			logEntryPos := db.index.Get(realKey)
 			// 和内存中的索引位置进行比较。如果有效则重写
 			if logEntryPos != nil &&

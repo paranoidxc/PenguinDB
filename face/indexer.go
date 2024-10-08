@@ -19,6 +19,12 @@ type LogEntry struct {
 	Type  LogEntryType
 }
 
+// TransactionRecord 暂存的事务相关的数据
+type TransactionRecord struct {
+	Record *LogEntry
+	Pos    *LogEntryPos
+}
+
 type Indexer interface {
 	// Set 向索引中存储 key 对应的数值位置信息
 	Set(key []byte, pos *LogEntryPos) *LogEntryPos
