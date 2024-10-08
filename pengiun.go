@@ -23,22 +23,25 @@ const (
 	fileLockName     = "flock"
 	mergeDirName     = "-merge"
 	mergeFinishedKye = "merge.finished"
+	seqNoKey         = "seq.no"
 )
 
 type DB struct {
-	options     Options
-	closed      bool
-	isMerging   bool
-	mu          *sync.RWMutex
-	index       face.Indexer
-	activeFile  *wal.DataFile
-	fileIds     []int
-	olderFiles  map[uint32]*wal.DataFile
-	fileLock    *flock.Flock
-	isInitial   bool
-	bytesWrite  uint
-	reclaimSize int64
-	watcher     chan watch.WatcherEvent
+	options         Options
+	closed          bool
+	isMerging       bool
+	mu              *sync.RWMutex
+	index           face.Indexer
+	activeFile      *wal.DataFile
+	fileIds         []int
+	olderFiles      map[uint32]*wal.DataFile
+	fileLock        *flock.Flock
+	isInitial       bool
+	bytesWrite      uint
+	reclaimSize     int64
+	watcher         chan watch.WatcherEvent
+	seqNo           uint64
+	seqNoFileExists bool
 }
 
 func Open(options Options) (*DB, error) {
